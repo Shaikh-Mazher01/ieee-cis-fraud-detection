@@ -1,0 +1,47 @@
+# ==========================================
+# PYTHON & VIRTUAL ENVIRONMENTS
+# ==========================================
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.DS_Store
+
+# ==========================================
+# IDEs & EDITORS
+# ==========================================
+.vscode/
+.idea/
+
+# ==========================================
+# DATA FILES (Never commit heavy CSVs/Parquets)
+# ==========================================
+data/raw/*
+!data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/synthetic/*
+!data/synthetic/.gitkeep
+
+# ==========================================
+# MODELS & BUNDLES
+# ==========================================
+models/*
+outputs/*/models/*
+!outputs/*/models/.gitkeep
+
+# ==========================================
+# OUTPUTS, LOGS & TRACKING DATABASES
+# ==========================================
+outputs/real/
+outputs/synthetic/
+mlflow.db
+mlruns/
+*.log
+*.sqlite
+*.db
