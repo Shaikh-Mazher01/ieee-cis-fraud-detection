@@ -1,61 +1,79 @@
 import streamlit as st
-import joblib
 import pandas as pd
 import numpy as np
-from pathlib import Path
+import joblib
+import pathlib
 
-# Page config
-st.set_page_config(page_title="IEEE-CIS Fraud Detection", page_icon="🛡️", layout="centered")
+st.set_page_config(
+    page_title="IEEE-CIS Fraud Detection Demo",
+    page_icon="🛡️",
+    layout="wide"
+)
 
-st.title("🛡️ AI Fraud Detection System")
-st.write("Enter transaction details below to check if it is **APPROVE** or **REVIEW**.")
-
-# Load the trained model bundle safely
 @st.cache_resource
-def load_model():
-    model_path = Path("outputs/real/models/bundle.joblib")
-    if model_path.exists():
-        return joblib.load(model_path)
-    return None
+def load_artifacts():
+    # Assumes model and sample data are stored in models/ and data/
+    model_path = pathlib.Path("models/fraud_model.pkl")
+    sample_path = pathlib.Path("data/test_sample_200.parquet")
+    
+    model = joblib.load(model_path) if model_path.exists() else None
+    sample_df = pd.read_parquet(sample_path) if sample_path.exists() else None
+    return model, sample_df
 
-bundle = load_model()
+model, df_sample = load_artifacts()
 
-if bundle is None:
-    st.error("Model bundle not found! Make sure outputs/real/models/bundle.joblib is pushed to GitHub.")
+st.title("🛡️ IEEE-CIS Fraud Detection Engine")
+st.markdown("""
+Interactive demo for the Fraud Detection system. Select a real historical test transaction below, 
+inspect or modify its features, and evaluate the model's risk score and operational decision.
+""")
+
+if model is None or df_sample is None:
+    st.error("Model artifacts or test sample parquet not found. Please ensure `models/fraud_model.pkl` and `data/test_sample_200.parquet` exist.")
 else:
-    model = bundle["model"]
-    builder = bundle["builder"]
-    threshold = bundle.get("threshold", 0.02)
+    # Sidebar selection
+    st.sidebar.header("Transaction Selector")
+    sample_idx = st.sidebar.selectbox(
+        "Choose a Test Transaction", 
+        options=range(min(50, len(df_sample))),
+        format_func=lambda i: f"Transaction #{i} (Amt: ${df_sample.iloc[i].get('TransactionAmt', 0):.2f})"
+    )
+    
+    row = df_sample.iloc[sample_idx].copy()
+    
+    # Extract target if present
+    true_label = row.pop('isFraud', None)
+    
+    st.subheader("Transaction Details")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        tx_amt = st.number_input("Transaction Amount ($)", value=float(row.get('TransactionAmt', 50.0)), step=10.0)
+    with col2:
+        product_cd = st.text_input("Product Code", value=str(row.get('ProductCD', 'W')))
+    with col3:
+        card1 = st.number_input("Card 1 ID", value=int(row.get('card1', 10000)))
 
-    # Input form
-    st.subheader("Transaction Parameters")
-    amt = st.number_input("Transaction Amount ($)", min_value=0.0, value=117.50)
-    product_cd = st.selectbox("Product Code (ProductCD)", ["W", "C", "R", "H", "S"])
-    card4 = st.selectbox("Card Type (card4)", ["visa", "mastercard", "discover", "amex"])
-    email = st.text_input("Email Domain (P_emaildomain)", "anonymous.com")
+    row['TransactionAmt'] = tx_amt
+    row['ProductCD'] = product_cd
+    row['card1'] = card1
 
-    if st.button("Analyze Transaction"):
-        # Create a mock dataframe matching input schema
-        input_data = pd.DataFrame([{
-            "TransactionAmt": amt,
-            "ProductCD": product_cd,
-            "card4": card4,
-            "P_emaildomain": email,
-            "TransactionDT": 86400  # Default dummy time
-        }])
+    if st.button("Evaluate Risk", type="primary"):
+        # Prepare feature vector matching model expectations
+        X_input = pd.DataFrame([row])
         
-        # Transform features and predict
-        try:
-            X_trans = builder.transform(input_data)
-            prob = float(model.predict_proba(X_trans)[:, 1][0])
+        # Predict probability
+        prob = model.predict_proba(X_input)[:, 1][0]
+        threshold = 0.5 # Default or loaded threshold
+        decision = "REVIEW / FLAG" if prob >= threshold else "APPROVE"
+        
+        st.divider()
+        res_col1, res_col2, res_col3 = st.columns(3)
+        res_col1.metric("Fraud Probability", f"{prob:.2%}")
+        res_col2.metric("Model Decision", decision)
+        if true_label is not None:
+            res_col3.metric("Actual Label", "Fraud" if true_label == 1 else "Legitimate")
             
-            st.divider()
-            st.metric(label="Fraud Probability Score", value=f"{prob:.4f}")
-            
-            if prob >= threshold:
-                st.error("🚨 **Decision: REVIEW** (High Risk of Fraud)")
-            else:
-                st.success("✅ **Decision: APPROVE** (Low Risk)")
-                
-        except Exception as e:
-            st.error(f"Error during prediction: {e}")
+        if prob >= threshold:
+            st.warning("⚠️ Transaction flagged for manual fraud analyst review.")
+        else:
+            st.success("✅ Transaction processed successfully.")

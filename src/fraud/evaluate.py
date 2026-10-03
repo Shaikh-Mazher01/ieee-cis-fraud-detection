@@ -7,6 +7,8 @@ import joblib
 import matplotlib
 import numpy as np
 import pandas as pd
+import shap
+import xgboost as xgb
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -54,7 +56,7 @@ def baselines(y, amount, review_cost, loss_mult=1.0) -> dict:
     amount = np.asarray(amount, dtype="float64")
     return {
         "approve_everything": float(amount[y].sum()) * loss_mult,   # no model: eat every fraud
-        "review_everything": review_cost * len(y),                  # perfect safety, impossible workload
+        "review_everything": review_cost * len(y),                    # perfect safety, impossible workload
     }
 
 
@@ -115,7 +117,7 @@ def plot_confusion(tp, fp, fn, tn, out, thr):
     for (i, j), v in np.ndenumerate(m):
         ax.text(j, i, f"{v:,}", ha="center", va="center", fontsize=12, color="black")
     ax.set(xticks=[0, 1], yticks=[0, 1], xticklabels=["approve", "flag"], yticklabels=["legit", "fraud"],
-           xlabel="Model decision", ylabel="Truth", title=f"Test confusion matrix @ {thr:.2f}")
+            xlabel="Model decision", ylabel="Truth", title=f"Test confusion matrix @ {thr:.2f}")
     _save(fig, out)
 
 
@@ -164,16 +166,15 @@ def performance_over_time(meta, p, day_col="day", bucket=14):
 def shap_report(cfg, bundle, ids) -> pd.DataFrame | None:
     model = bundle["model"]
     if not hasattr(model, "get_booster"):
-        log.info("SHAP skipped: best model is not tree based")
+        log.info("SHAPS skipped: best model is not tree based")
         return None
-    import shap
 
     n = min(cfg["shap"]["sample_size"], len(ids))
     pick = np.random.default_rng(cfg["seed"]).choice(ids, n, replace=False)
     sample = load_merged(cfg, filters=[(cfg["data"]["id_col"], "in", pick.tolist())])
     X = bundle["builder"].transform(sample)
     
-    # Fix for XGBoost 2.x / SHAP base_score compatibility string formatting issue
+    # Fix for XGBoost base_score compatibility
     if hasattr(model, "base_score") and not isinstance(model.base_score, (int, float)):
         try:
             val = model.base_score
@@ -183,11 +184,17 @@ def shap_report(cfg, bundle, ids) -> pd.DataFrame | None:
         except Exception:
             pass
 
-    explainer = shap.TreeExplainer(model)
-    sv = explainer.shap_values(X)
+    # Extract underlying booster and compute contributions safely for XGBoost 3.x
+    booster = model.get_booster() if hasattr(model, "get_booster") else model
+    dmatrix = xgb.DMatrix(X)
+    contribs = booster.predict(dmatrix, pred_contribs=True)
+    
+    sv = contribs[:, :-1]
+
     imp = pd.DataFrame({"feature": X.columns, "mean_abs_shap": np.abs(sv).mean(0)}) \
         .sort_values("mean_abs_shap", ascending=False)
     imp.to_csv(cfg["paths"]["tables_dir"] / "shap_importance.csv", index=False)
+    
     plt.figure()
     shap.summary_plot(sv, X, max_display=20, show=False)
     plt.title("What pushes a transaction toward 'fraud' (SHAP, test sample)")
